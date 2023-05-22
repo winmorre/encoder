@@ -1,6 +1,9 @@
 package configs
 
 type EncoderConfig struct {
+	ProgressUpdate float32
+	Thread         int
+	Format         Formats
 }
 
 type Formats struct {
