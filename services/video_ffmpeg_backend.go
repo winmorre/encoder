@@ -3,10 +3,12 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -117,6 +119,54 @@ func (ff *FFmpegBackend) GetThumbnail(videoPath string, atTime float64) string {
 	return fPath
 }
 
-func (ff *FFmpegBackend) Encode(srcPath, targetPath string, params []string) interface{} {
+func (ff *FFmpegBackend) Encode(srcPath, targetPath string, params []string) (chan float64, chan error) {
+	/* Encode a video*/
+	mediaInfo := ff.GetMediaInfo(srcPath)
+	totalDuration := mediaInfo.Format.Duration
+	totalPercentage := make(chan float64)
+	execError := make(chan error)
 
+	cmd := []string{ff.ffmpegPath, "-i", srcPath}
+	cmd = append(cmd, params...)
+	cmd = append(cmd, targetPath)
+
+	execCmd := spawn(cmd)
+	var errBuilder strings.Builder
+	execCmd.Stderr = &errBuilder
+	var outPutBuilder strings.Builder
+	execCmd.Stdout = &outPutBuilder
+
+	go func() {
+		exErr := execCmd.Run()
+		execError <- exErr
+		k, _ := regexp.Compile(regexTimeCode)
+		timeStr := k.FindAllString(errBuilder.String(), -1)[0]
+
+		var Time float64
+		for _, t := range strings.Split(timeStr, ":") {
+			parseT, err := strconv.ParseFloat(t, 64)
+			if err != nil {
+				panic(fmt.Sprintf("Error converting timeStr;  %v", err.Error()))
+			}
+			Time = 60 * parseT
+		}
+		totalDurationF, err := strconv.ParseFloat(totalDuration, 64)
+		if err != nil {
+			panic(fmt.Sprintf("Error converting totalDuration;  %v", err.Error()))
+		}
+		percent := math.Round(Time / totalDurationF)
+		totalPercentage <- percent
+
+		fmt.Printf("Percentage return %v", percent)
+
+		if m, _ := os.Stat(targetPath); m.Size() == 0 {
+			panic("File size of generated file is 0")
+		}
+
+		if execCmd.ProcessState.ExitCode() != 0 {
+			panic(fmt.Sprintf("%v exited with code %v", execCmd.Args, execCmd.ProcessState.ExitCode()))
+		}
+	}()
+
+	return totalPercentage, execError
 }
