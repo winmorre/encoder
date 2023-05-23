@@ -11,7 +11,7 @@ func ConvertVideo(file os.File, format configs.Formats) {
 	fileName := make(chan string)
 
 	go createTempFileForVideo(&file, fileName)
-	var backend FFmpegBackend
+	var backend = FFmpegBackend{ffmpegPath: "ffmpeg", ffprobePath: "ffprobe"}
 
 	encode, err := backend.Encode(<-fileName, "", format.Params)
 
@@ -20,11 +20,6 @@ func ConvertVideo(file os.File, format configs.Formats) {
 	}
 	fmt.Printf("File encoded: %v", <-encode)
 }
-
-//func encode(srcPath string, format configs.Formats, options map[string]string) {
-//	// create a temp file, if not already existed
-//	// encode this
-//}
 
 func createTempFileForVideo(file *os.File, path chan<- string) {
 	tempFile, err := os.CreateTemp("", file.Name())
@@ -37,3 +32,12 @@ func createTempFileForVideo(file *os.File, path chan<- string) {
 	_, _ = tempFile.Write(vuf)
 	path <- tempFile.Name()
 }
+
+/*
+- see how to add gin rest
+- get the uploaded file
+- save temporary
+- encode
+- return the encoded file
+- remove temp file
+*/
