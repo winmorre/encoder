@@ -2,15 +2,15 @@ package services
 
 import (
 	"encoder/configs"
+	"encoder/models"
 	"fmt"
 	"os"
 )
 
-func ConvertVideo(file os.File, format configs.Formats) {
+func ConvertVideo(tempFileInfo <-chan models.TempFileOutput, format configs.Formats) {
 	/* Converts video file into a defined format*/
 	fileName := make(chan string)
 
-	go createTempFileForVideo(&file, fileName)
 	var backend = FFmpegBackend{ffmpegPath: "ffmpeg", ffprobePath: "ffprobe"}
 
 	encode, err := backend.Encode(<-fileName, "", format.Params)
