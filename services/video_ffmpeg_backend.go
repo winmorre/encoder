@@ -18,8 +18,8 @@ const regexTimeCode = `"time=(\d+:\d+.\d+)"`
 
 type FFmpegBackend struct {
 	Params      []string
-	ffmpegPath  string
-	ffprobePath string
+	FfmpegPath  string
+	FfprobePath string
 }
 
 func spawn(cmd []string) *exec.Cmd {
@@ -56,8 +56,11 @@ func parseStreamOutput(data string) (*StreamOutput, error) {
 }
 
 func (ff *FFmpegBackend) GetMediaInfo(ctx context.Context, videoPath string, outputInfo chan *StreamOutput, execError chan error) {
-	cmd := []string{ff.ffprobePath, "-i", videoPath, "-hide_banner", "-loglevel", "warning", "-of", "json", "-show_format", "-show_streams"}
+	cmd := []string{ff.FfprobePath, "-i", videoPath, "-hide_banner", "-loglevel", "warning", "-of", "json", "-show_format", "-show_streams"}
 	execCmd := spawn(cmd)
+
+	defer os.Remove(videoPath)
+
 	var mediaInfo *StreamOutput
 
 	var builder strings.Builder
@@ -105,13 +108,13 @@ func (ff *FFmpegBackend) GetThumbnail(ctx context.Context, videoPath string, atT
 			}
 		case media := <-mediaInfo:
 			if len(media.Video) != 0 {
-				return getMediaFilePath(ff, file, media, fileName, videoPath, atTime)
+				return getMediaFilePath(ff, file, media, &fileName, &videoPath, atTime)
 			}
 		}
 	}
 }
 
-func getMediaFilePath(backend *FFmpegBackend, file *os.File, mediaInfo *StreamOutput, fileName, videoPath string, atTime float64) string {
+func getMediaFilePath(backend *FFmpegBackend, file *os.File, mediaInfo *StreamOutput, fileName, videoPath *string, atTime float64) string {
 	duration, _ := strconv.ParseFloat(mediaInfo.Format.Duration, 64)
 	var err error
 	if atTime > duration {
@@ -125,7 +128,7 @@ func getMediaFilePath(backend *FFmpegBackend, file *os.File, mediaInfo *StreamOu
 		panic(fmt.Sprintf("Error occured getting Abs path: %v", err.Error()))
 	}
 
-	cmd := []string{backend.ffmpegPath, "-i", videoPath, "-vframes", "1", "-ss", fmt.Sprintf("%v", atTime), "-y", fPath}
+	cmd := []string{backend.FfmpegPath, "-i", *videoPath, "-vframes", "1", "-ss", fmt.Sprintf("%v", atTime), "-y", fPath}
 
 	execCmd := spawn(cmd)
 	err = execCmd.Run()
@@ -142,7 +145,7 @@ func getMediaFilePath(backend *FFmpegBackend, file *os.File, mediaInfo *StreamOu
 	}
 
 	if imageFileInfo.Size() == 0.0 {
-		os.Remove(fileName)
+		os.Remove(*fileName)
 		panic("Failed to generate thumbnail")
 	}
 	return fPath
@@ -167,7 +170,7 @@ func (ff *FFmpegBackend) Encode(ctx context.Context, srcPath, targetPath string,
 	totalPercentage := make(chan float64)
 
 	defer close(totalPercentage)
-	cmd := []string{ff.ffmpegPath, "-i", srcPath}
+	cmd := []string{ff.FfmpegPath, "-i", srcPath}
 	cmd = append(cmd, params...)
 	cmd = append(cmd, targetPath)
 

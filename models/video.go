@@ -18,3 +18,8 @@ type TempFileOutput struct {
 	Err      error
 	Success  bool
 }
+
+type MediaInfoRequest struct {
+	Video  *multipart.FileHeader `form:"video"`
+	AtTime int                   `form:"at_time"`
+}

@@ -138,4 +138,64 @@ func getEncodedFile(path string) (*os.File, error) {
 	return file, err
 }
 
-func GetMediaInfo(ctx *gin.Context) {}
+func GetMediaInfo(ctx *gin.Context) {
+	var request models.MediaInfoRequest
+	newCtx, cancelFunc := context.WithTimeout(ctx, time.Second)
+
+	defer cancelFunc()
+	var err error
+	err = ctx.ShouldBind(&request)
+
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"status": "failed", "msg": "Data format not correct"})
+		fmt.Printf("data binding error:  %v", err.Error())
+		return
+	}
+
+	mediaInfo := make(chan *services.StreamOutput)
+	execError := make(chan error)
+	tempFileChan := make(chan *models.TempFileOutput)
+
+	defer close(mediaInfo)
+	defer close(execError)
+	defer close(tempFileChan)
+
+	err = nil
+	saveFileAsTempFile(request.Video, tempFileChan)
+
+	var tempInfo *models.TempFileOutput
+
+	ff := services.FFmpegBackend{FfmpegPath: "ffmpeg", FfprobePath: "ffprobe"}
+
+	for {
+		select {
+		case <-newCtx.Done():
+			fmt.Printf("New context Done:  %v", err.Error())
+			ctx.JSON(http.StatusBadRequest, gin.H{"status": "failed", "msg": err.Error()})
+			break
+		case tempInfo = <-tempFileChan:
+			if tempInfo.Success {
+				go ff.GetMediaInfo(ctx, tempInfo.Filename, mediaInfo, execError)
+			}
+		case err = <-execError:
+			if err != nil {
+				ctx.JSON(http.StatusBadRequest, gin.H{"status": "failed", "msg": err.Error()})
+				break
+			}
+		case media := <-mediaInfo:
+			if media != nil {
+				ctx.JSON(http.StatusOK, gin.H{"status": "success", "data": media})
+				goto removeTempFile
+			}
+		}
+	}
+
+removeTempFile:
+	{
+		defer removeFile(tempInfo.Filename)
+		return
+	}
+}
+func removeFile(filePath string) {
+	defer os.Remove(filePath)
+}

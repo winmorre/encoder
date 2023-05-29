@@ -8,4 +8,5 @@ import (
 func (r Routes) videoRoutes(rg *gin.RouterGroup) {
 	vg := rg.Group("/videos")
 	vg.POST("/encode", controllers.EncodeVideo)
+	vg.POST("/get-media-info", controllers.GetMediaInfo)
 }
