@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -54,26 +55,30 @@ func parseStreamOutput(data string) (*StreamOutput, error) {
 	return &mediaInfo, err
 }
 
-func (ff *FFmpegBackend) GetMediaInfo(videoPath string) (mediaInfo *StreamOutput) {
+func (ff *FFmpegBackend) GetMediaInfo(ctx context.Context, videoPath string, outputInfo chan *StreamOutput, execError chan error) {
 	cmd := []string{ff.ffprobePath, "-i", videoPath, "-hide_banner", "-loglevel", "warning", "-of", "json", "-show_format", "-show_streams"}
 	execCmd := spawn(cmd)
+	var mediaInfo *StreamOutput
 
 	var builder strings.Builder
 	execCmd.Stdout = &builder
 	err := execCmd.Run()
-
-	if err != nil {
-		fmt.Printf("Error occurred while getting media Info:  %v", err.Error())
-	}
+	execError <- err
+	//if err != nil {
+	//	fmt.Printf("Error occurred while getting media Info:  %v", err.Error())
+	//	return
+	//}
 	mediaInfo, err = parseStreamOutput(builder.String())
 
-	if err != nil {
-		fmt.Printf("Error occurred parsing streamOuput:  %v", err.Error())
-	}
-	return mediaInfo
+	//if err != nil {
+	//	fmt.Printf("Error occurred parsing streamOuput:  %v", err.Error())
+	//	return
+	//}
+	outputInfo <- mediaInfo
+	execError <- err
 }
 
-func (ff *FFmpegBackend) GetThumbnail(videoPath string, atTime float64) string {
+func (ff *FFmpegBackend) GetThumbnail(ctx context.Context, videoPath string, atTime float64) string {
 	// Extract and image from a video
 	fileName := path.Base(videoPath)
 	fileNameSplit := strings.Split(fileName, ".")
@@ -82,9 +87,33 @@ func (ff *FFmpegBackend) GetThumbnail(videoPath string, atTime float64) string {
 	if err != nil {
 		panic(fmt.Sprintf("Temp file not creted %v", fileName))
 	}
-	mediaInfo := ff.GetMediaInfo(videoPath)
-	duration, _ := strconv.ParseFloat(mediaInfo.Format.Duration, 64)
+	mediaInfo := make(chan *StreamOutput)
+	execError := make(chan error)
 
+	defer close(mediaInfo)
+	defer close(execError)
+
+	go ff.GetMediaInfo(ctx, videoPath, mediaInfo, execError)
+
+	for {
+		select {
+		case <-ctx.Done():
+			break
+		case err := <-execError:
+			if err != nil {
+				break
+			}
+		case media := <-mediaInfo:
+			if len(media.Video) != 0 {
+				return getMediaFilePath(ff, file, media, fileName, videoPath, atTime)
+			}
+		}
+	}
+}
+
+func getMediaFilePath(backend *FFmpegBackend, file *os.File, mediaInfo *StreamOutput, fileName, videoPath string, atTime float64) string {
+	duration, _ := strconv.ParseFloat(mediaInfo.Format.Duration, 64)
+	var err error
 	if atTime > duration {
 		panic(fmt.Sprintf("atTime (%v) is greater than the video duration", atTime))
 	}
@@ -96,7 +125,7 @@ func (ff *FFmpegBackend) GetThumbnail(videoPath string, atTime float64) string {
 		panic(fmt.Sprintf("Error occured getting Abs path: %v", err.Error()))
 	}
 
-	cmd := []string{ff.ffmpegPath, "-i", videoPath, "-vframes", "1", "-ss", fmt.Sprintf("%v", atTime), "-y", fPath}
+	cmd := []string{backend.ffmpegPath, "-i", videoPath, "-vframes", "1", "-ss", fmt.Sprintf("%v", atTime), "-y", fPath}
 
 	execCmd := spawn(cmd)
 	err = execCmd.Run()
@@ -112,20 +141,32 @@ func (ff *FFmpegBackend) GetThumbnail(videoPath string, atTime float64) string {
 		panic(fmt.Sprintf("Could not get file stat:  %v", err.Error()))
 	}
 
-	if imageFileInfo.Size() < 1.0 {
+	if imageFileInfo.Size() == 0.0 {
 		os.Remove(fileName)
-		panic("Failed to generate thumnail")
+		panic("Failed to generate thumbnail")
 	}
 	return fPath
 }
 
-func (ff *FFmpegBackend) Encode(srcPath, targetPath string, params []string) (chan float64, chan error) {
+func (ff *FFmpegBackend) Encode(ctx context.Context, srcPath, targetPath string, params []string) (float64, error) {
 	/* Encode a video*/
-	mediaInfo := ff.GetMediaInfo(srcPath)
-	totalDuration := mediaInfo.Format.Duration
-	totalPercentage := make(chan float64)
+	mediaInfo := make(chan *StreamOutput)
 	execError := make(chan error)
+	defer close(execError)
+	defer close(mediaInfo)
 
+	go ff.GetMediaInfo(ctx, srcPath, mediaInfo, execError)
+	var totalDuration string
+
+	select {
+	case <-ctx.Done():
+	case media := <-mediaInfo:
+		totalDuration = media.Format.Duration
+	}
+
+	totalPercentage := make(chan float64)
+
+	defer close(totalPercentage)
 	cmd := []string{ff.ffmpegPath, "-i", srcPath}
 	cmd = append(cmd, params...)
 	cmd = append(cmd, targetPath)
@@ -168,5 +209,15 @@ func (ff *FFmpegBackend) Encode(srcPath, targetPath string, params []string) (ch
 		}
 	}()
 
-	return totalPercentage, execError
+	for {
+		select {
+		case <-ctx.Done():
+			totalPercentage <- 0.0
+			execError <- ctx.Err()
+			return 0.0, ctx.Err()
+		default:
+			return <-totalPercentage, <-execError
+
+		}
+	}
 }
